@@ -682,26 +682,30 @@ _hb_idle_surfaced_path() {
 # (see the per-window stale loop's identical exclusion). An `unknown` busy
 # verdict is deliberately excluded, never promoted to idle: the source could
 # not answer, and treating that as idle would wake constantly for a harness
-# whose busy source is unverified.
-scan_idle_lanes() {  # <state>
-  local state=$1 w kind task last open verdict token
+# whose busy source is unverified. A lane observed busy again clears its
+# surfaced marker, so a later idle spell always re-fires even when its last
+# status line is unchanged - the worker this predicate targets is exactly the
+# one that goes idle without writing a status.
+scan_idle_lanes() {
+  local w kind task last open verdict token
   while IFS= read -r w; do
     kind=$(window_kind "$w")
     [ "$kind" = secondmate ] && continue
-    task=$(window_to_task "$w" "$state")
+    task=$(window_to_task "$w" "$STATE")
     [ -n "$task" ] || continue
-    last=$(last_status_line "$state/$task.status")
+    last=$(last_status_line "$STATE/$task.status")
     status_is_paused_or_captain_held "$last" && continue
     # A captain-relevant last line (done:/needs-decision:/blocked:/failed:, e.g.
     # a PR ready and waiting on review) is already the captain-relevant path's
     # own signal to surface or suppress; the idle scan must not double-report it.
     status_is_captain_relevant "$last" && continue
-    open=$(status_open_decisions "$state/$task.status")
+    open=$(status_open_decisions "$STATE/$task.status")
     [ -n "$open" ] && continue
     verdict=$(lane_busy_verdict "$w" "$task")
     token=${verdict%% *}
     case "$token" in
       idle|dead) printf '%s\t%s\t%s\t%s\n' "$w" "$task" "$token" "$last" ;;
+      busy) rm -f "$(_hb_idle_surfaced_path "$task")" 2>/dev/null || true ;;
     esac
   done < <(recorded_windows)
   return 0
@@ -718,7 +722,7 @@ heartbeat_idle_lane_actionable() {
     prev=$(cat "$marker" 2>/dev/null || true)
     [ "$prev" = "$token"$'\t'"$last" ] && continue
     return 0
-  done < <(scan_idle_lanes "$STATE")
+  done < <(scan_idle_lanes)
   return 1
 }
 
@@ -731,7 +735,7 @@ mark_all_idle_lanes_surfaced() {
   while IFS=$(printf '\t') read -r w task token last; do
     [ -n "$w" ] || continue
     printf '%s\t%s' "$token" "$last" > "$(_hb_idle_surfaced_path "$task")"
-  done < <(scan_idle_lanes "$STATE")
+  done < <(scan_idle_lanes)
 }
 
 # event_wait_or_sleep: the terminal wait of each supervision cycle. For a home

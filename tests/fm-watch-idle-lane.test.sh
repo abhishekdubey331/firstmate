@@ -132,7 +132,7 @@ test_busy_lane_not_actionable() {
   fm_write_meta "$STATE_DIR/t1.meta" "window=sess:w1" "backend=tmux" "harness=pi" "kind=ship"
   busy_record t1 busy agent-start
   local out
-  out=$(scan_idle_lanes "$STATE_DIR")
+  out=$(scan_idle_lanes)
   [ -z "$out" ] || fail "a busy lane was classified idle/dead: $out"
   heartbeat_idle_lane_actionable && fail "a busy lane was reported actionable"
   pass "a lane whose agent is genuinely busy is not actionable"
@@ -143,7 +143,7 @@ test_dead_lane_actionable() {
   fm_write_meta "$STATE_DIR/t2.meta" "window=sess:w2" "backend=tmux" "harness=pi" "kind=ship"
   export FM_FAKE_TMUX_DEAD="sess:w2"
   local out
-  out=$(scan_idle_lanes "$STATE_DIR")
+  out=$(scan_idle_lanes)
   printf '%s' "$out" | grep -F "$(printf 'sess:w2\tt2\tdead')" >/dev/null \
     || fail "a dead lane (endpoint gone) was not classified dead: $out"
   heartbeat_idle_lane_actionable || fail "a dead lane was not reported actionable"
@@ -156,7 +156,7 @@ test_idle_lane_actionable() {
   fm_write_meta "$STATE_DIR/t3.meta" "window=sess:w3" "backend=tmux" "harness=pi" "kind=ship"
   busy_record t3 idle agent-settled
   local out
-  out=$(scan_idle_lanes "$STATE_DIR")
+  out=$(scan_idle_lanes)
   printf '%s' "$out" | grep -F "$(printf 'sess:w3\tt3\tidle')" >/dev/null \
     || fail "a live idle lane was not classified idle: $out"
   heartbeat_idle_lane_actionable || fail "a live idle lane was not reported actionable"
@@ -169,7 +169,7 @@ test_pr_waiting_lane_not_actionable() {
   printf 'done: PR https://example.test/pr/9\n' > "$STATE_DIR/t4.status"
   busy_record t4 idle agent-settled
   local out
-  out=$(scan_idle_lanes "$STATE_DIR")
+  out=$(scan_idle_lanes)
   [ -z "$out" ] || fail "a PR-ready-and-waiting lane was classified idle-actionable: $out"
   heartbeat_idle_lane_actionable && fail "a PR-ready-and-waiting lane was reported actionable"
   pass "a lane whose PR is open and waiting on review is not actionable"
@@ -183,7 +183,7 @@ test_captain_decision_lane_not_actionable() {
   printf 'needs-decision [key=q1]: pick A or B\nworking: still deciding\n' > "$STATE_DIR/t5.status"
   busy_record t5 idle agent-settled
   local out
-  out=$(scan_idle_lanes "$STATE_DIR")
+  out=$(scan_idle_lanes)
   [ -z "$out" ] || fail "a lane parked on an open captain decision was classified idle-actionable: $out"
   heartbeat_idle_lane_actionable && fail "a lane parked on an open captain decision was reported actionable"
   pass "a lane parked on a still-open captain decision is not actionable"
@@ -195,7 +195,7 @@ test_paused_lane_not_actionable() {
   printf 'paused: holding for the upstream release\n' > "$STATE_DIR/t6.status"
   busy_record t6 idle agent-settled
   local out
-  out=$(scan_idle_lanes "$STATE_DIR")
+  out=$(scan_idle_lanes)
   [ -z "$out" ] || fail "a paused lane was classified idle-actionable: $out"
   heartbeat_idle_lane_actionable && fail "a paused lane was reported actionable"
   pass "a lane on a declared external-wait pause is not actionable"
@@ -207,7 +207,7 @@ test_unknown_verdict_not_actionable() {
   # No busy-state record was ever armed for t7: fm_busy_classify reports
   # "unknown missing", never idle - the source could not answer.
   local out
-  out=$(scan_idle_lanes "$STATE_DIR")
+  out=$(scan_idle_lanes)
   [ -z "$out" ] || fail "an unknown busy verdict was classified idle/dead: $out"
   heartbeat_idle_lane_actionable && fail "an unknown busy verdict was reported actionable"
   pass "an unknown busy verdict is never promoted to idle-actionable"
@@ -218,7 +218,7 @@ test_secondmate_lane_excluded() {
   fm_write_meta "$STATE_DIR/t9.meta" "window=sess:w9" "backend=tmux" "harness=pi" "kind=secondmate"
   busy_record t9 idle agent-settled
   local out
-  out=$(scan_idle_lanes "$STATE_DIR")
+  out=$(scan_idle_lanes)
   [ -z "$out" ] || fail "a secondmate lane was classified idle-actionable: $out"
   pass "a secondmate lane is excluded (its routed status is the supervision signal, not its pane)"
 }
@@ -237,6 +237,27 @@ test_already_surfaced_idle_lane_not_refired() {
   printf 'working: still setting up\n' > "$STATE_DIR/t8.status"
   heartbeat_idle_lane_actionable || fail "an idle lane with a genuinely new status line did not re-fire"
   pass "an idle lane already surfaced does not re-fire until its verdict or status genuinely changes"
+}
+
+# A busy spell ends the suppression episode: the marker is keyed on the
+# (verdict, last-status) pair, and the worker this predicate targets goes idle
+# without writing a status, so an unchanged status line must never suppress a
+# second silence episode.
+test_idle_marker_cleared_by_a_busy_spell() {
+  reset_state
+  fm_write_meta "$STATE_DIR/t11.meta" "window=sess:w11" "backend=tmux" "harness=pi" "kind=ship"
+  printf 'working: setting up\n' > "$STATE_DIR/t11.status"
+  busy_record t11 idle agent-settled
+  heartbeat_idle_lane_actionable || fail "a fresh idle lane was not reported actionable before marking"
+  mark_all_idle_lanes_surfaced
+  [ -s "$STATE_DIR/.hb-idle-surfaced-t11" ] || fail "mark_all_idle_lanes_surfaced did not write the surfaced marker"
+  heartbeat_idle_lane_actionable && fail "an idle lane already marked surfaced re-fired with nothing changed"
+  busy_record t11 busy agent-start
+  scan_idle_lanes >/dev/null
+  [ -e "$STATE_DIR/.hb-idle-surfaced-t11" ] && fail "a lane observed busy again kept its stale surfaced marker"
+  busy_record t11 idle agent-settled
+  heartbeat_idle_lane_actionable || fail "a second idle spell with an unchanged status line did not re-fire"
+  pass "a busy spell clears the surfaced marker, so a later idle spell re-fires on an unchanged status line"
 }
 
 # --- fleet_has_recorded_endpoint: the backoff-cap selector -------------------
@@ -344,6 +365,7 @@ test_paused_lane_not_actionable
 test_unknown_verdict_not_actionable
 test_secondmate_lane_excluded
 test_already_surfaced_idle_lane_not_refired
+test_idle_marker_cleared_by_a_busy_spell
 test_fleet_has_recorded_endpoint
 test_dead_lane_surfaces_via_heartbeat
 test_heartbeat_backoff_capped_while_fleet_busy
