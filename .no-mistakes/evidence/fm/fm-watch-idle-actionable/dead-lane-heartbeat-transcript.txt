@@ -1,0 +1,20 @@
+firstmate watcher - idle/dead lane supervision (manual incident reproduction)
+scenario: 2-lane fleet, one worker dead 40+ min with no captain-relevant status
+
+=== BEFORE  (base f1a4af4) ===
+fleet: pr-review (worker died, endpoint gone, no status line), docs-pass (busy, healthy)
+watcher outcome : still sleeping after 6s of heartbeats - NOTHING surfaced
+captain wake queue:
+  (empty - no supervision signal)
+lanes marked surfaced: 
+
+=== AFTER   (12de9fe) ===
+fleet: pr-review (worker died, endpoint gone, no status line), docs-pass (busy, healthy)
+watcher outcome : woke and exited, wake reason -> 'heartbeat '
+captain wake queue:
+  1786835017	1	heartbeat	heartbeat	heartbeat
+lanes marked surfaced: pr-review 
+
+=== heartbeat cadence after a long no-change streak (12de9fe) ===
+  fleet with a recorded endpoint: heartbeat scan ran within 6s (cap 5s) - fleet stays observed
+  empty fleet (unchanged behavior): no heartbeat scan - still backed off toward the 7200s cap
