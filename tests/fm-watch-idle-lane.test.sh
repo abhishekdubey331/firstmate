@@ -81,7 +81,9 @@ export PATH="$FAKEBIN:$PATH"
 # Source the watcher to load its functions without acquiring the singleton lock
 # or entering the blocking loop (its own source guard returns early); see
 # tests/fm-supervision-events.test.sh for the same pattern.
-# shellcheck disable=SC1091
+# Production modules are independently linted canonical roots. Keep this test's
+# ShellCheck context local while preserving its unchanged runtime source path.
+# shellcheck source=/dev/null
 . "$WATCH"
 
 reset_state() {
