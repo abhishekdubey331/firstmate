@@ -39,15 +39,22 @@ mkdir -p "$STATE_DIR" "$FAKEBIN"
 #     space-separated set) fails (endpoint gone); every other target succeeds.
 #   - `display-message ... pane_current_command`, unused here but harmless to
 #     keep answering so a stray caller never hangs on a wrong branch.
+#   - `capture-pane`, answered with FM_FAKE_TMUX_CAPTURE ONLY while that
+#     variable is set, for the Grok rendered-tail arm of fm_busy_classify.
 # recorded_windows, window_kind/backend/harness/label, and the busy-record path
 # all resolve from *.meta and state/*.busy-state, never from tmux, so no other
-# subcommand (capture-pane, list-windows) is needed; a genuinely dead lane's
-# pane capture failing (and being skipped by the per-window stale loop) is
-# exactly the production gap this predicate exists to close, so this fake
-# leaves those subcommands unhandled (exit 1) on purpose.
+# subcommand (list-windows) is needed; a genuinely dead lane's pane capture
+# failing (and being skipped by the per-window stale loop) is exactly the
+# production gap this predicate exists to close, so this fake leaves every
+# unlisted subcommand - and capture-pane with no FM_FAKE_TMUX_CAPTURE set -
+# unhandled (exit 1) on purpose.
 cat > "$FAKEBIN/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+if [ "${1:-}" = "capture-pane" ] && [ -n "${FM_FAKE_TMUX_CAPTURE+set}" ]; then
+  printf '%s\n' "$FM_FAKE_TMUX_CAPTURE"
+  exit 0
+fi
 if [ "${1:-}" = "display-message" ]; then
   target="" prev=""
   for a in "$@"; do
@@ -83,7 +90,7 @@ reset_state() {
     "$STATE_DIR"/.wake-queue "$STATE_DIR"/.wake-queue.seq "$STATE_DIR"/.heartbeat-streak \
     "$STATE_DIR"/.last-heartbeat "$STATE_DIR"/.watcher-down 2>/dev/null || true
   rm -rf "$STATE_DIR/.watch.lock" 2>/dev/null || true
-  unset FM_FAKE_TMUX_DEAD
+  unset FM_FAKE_TMUX_DEAD FM_FAKE_TMUX_CAPTURE
 }
 
 # Record one busy-state event for <task> through the real writer (a real
@@ -264,6 +271,29 @@ test_idle_marker_keyed_on_busy_state_freshness() {
   pass "the surfaced marker is keyed on busy-state freshness, so a later idle spell re-fires on an unchanged status line"
 }
 
+# A harness with no busy-state record writer (grok/muse/cursor) has no
+# freshness signal at all: the field is empty, never a stand-in mtime that
+# would look fresh without ever moving. Those lanes keep the original
+# last-status-only dedup, and the empty field must stay stable across scans.
+test_recordless_harness_has_an_empty_freshness_field() {
+  reset_state
+  fm_write_meta "$STATE_DIR/t12.meta" "window=sess:w12" "backend=tmux" "harness=grok" "kind=ship"
+  printf 'working: setting up\n' > "$STATE_DIR/t12.status"
+  export FM_FAKE_TMUX_CAPTURE="waiting for your next instruction"
+  local first second
+  first=$(scan_idle_lanes)
+  [ -n "$first" ] || fail "a grok lane with no busy-state record was not classified idle"
+  [ -z "$(printf '%s' "$first" | cut -f4)" ] || fail "a lane with no busy-state record got a non-empty freshness field: $first"
+  [ -e "$STATE_DIR/t12.busy-state" ] && fail "the grok lane unexpectedly has a busy-state record, so this case proves nothing"
+  heartbeat_idle_lane_actionable || fail "a fresh idle grok lane was not reported actionable"
+  mark_all_idle_lanes_surfaced
+  second=$(scan_idle_lanes)
+  [ "$second" = "$first" ] || fail "the marker key of a recordless lane changed with nothing else changing: $first -> $second"
+  heartbeat_idle_lane_actionable && fail "a recordless idle lane re-fired with nothing changed"
+  unset FM_FAKE_TMUX_CAPTURE
+  pass "a lane with no busy-state record gets an empty freshness field and a stable marker key"
+}
+
 # --- fleet_has_recorded_endpoint: the backoff-cap selector -------------------
 
 test_fleet_has_recorded_endpoint() {
@@ -370,6 +400,7 @@ test_unknown_verdict_not_actionable
 test_secondmate_lane_excluded
 test_already_surfaced_idle_lane_not_refired
 test_idle_marker_keyed_on_busy_state_freshness
+test_recordless_harness_has_an_empty_freshness_field
 test_fleet_has_recorded_endpoint
 test_dead_lane_surfaces_via_heartbeat
 test_heartbeat_backoff_capped_while_fleet_busy

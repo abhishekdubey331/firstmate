@@ -668,12 +668,17 @@ _hb_idle_surfaced_path() {
 
 # lane_freshness_stamp: mtime of the lane's busy-state record, so a repeat idle
 # sample is a NEW silence episode whenever the record moved, even when the
-# heartbeat never sampled the intervening busy moment. Falls back to the meta
-# mtime for a harness that keeps no busy-state record (grok/muse/cursor).
+# heartbeat never sampled the intervening busy moment. The stamp is empty for a
+# harness with no busy-state record writer (grok/muse/cursor - grok is a
+# temporary rendered-text fallback, muse and cursor are pull-only sources), and
+# no other file's mtime stands in: a spawn-time mtime never moves, so it would
+# only disguise a constant as a freshness signal. The freshness-keyed re-fire
+# guarantee therefore covers the record-backed harnesses only (claude, pi,
+# pi-signed, opencode, and codex/kimi once verified); grok/muse/cursor keep the
+# original last-status-only dedup.
 lane_freshness_stamp() {  # <task>
   local task=$1 m
   m=$(stat_mtime "$STATE/$task.busy-state") || m=""
-  [ -n "$m" ] || m=$(stat_mtime "$STATE/$task.meta") || m=""
   printf '%s' "$m"
 }
 
