@@ -52,7 +52,9 @@
 #                          invalid pending retirements were preserved without
 #                          running a check or removing poll artifacts
 #   heartbeat              fleet-scan backstop found an unsurfaced captain-relevant
-#                          status, unless afk is active
+#                          status, or an idle/dead lane with no captain-relevant
+#                          status and no declared pause/captain-held/open decision
+#                          on record, unless afk is active
 #   check: inactive-outcome bounded poll-loop reconciliation found a suspicious
 #                          inactive terminal outcome that still lacks its durable
 #                          upstream receipt
@@ -119,7 +121,13 @@ fi
 
 POLL=${FM_POLL:-15}                   # seconds between cycles
 HEARTBEAT=${FM_HEARTBEAT:-600}        # base seconds between heartbeat scans
-HEARTBEAT_MAX=${FM_HEARTBEAT_MAX:-7200}  # heartbeat backoff cap
+HEARTBEAT_MAX=${FM_HEARTBEAT_MAX:-7200}  # heartbeat backoff cap for an EMPTY fleet
+# Heartbeat backoff cap while ANY task has a recorded endpoint (fleet_has_recorded_endpoint).
+# HEARTBEAT_MAX exists for an idle, empty fleet; a fleet with work in flight must
+# never be allowed to drift toward it, or a quiet stretch can leave the fleet
+# unobserved for up to HEARTBEAT_MAX seconds even while a worker sits dead or
+# finished. Defaults to the base HEARTBEAT itself, i.e. no backoff at all while busy.
+HEARTBEAT_BUSY_MAX=${FM_HEARTBEAT_BUSY_MAX:-$HEARTBEAT}
 CHECK_INTERVAL=${FM_CHECK_INTERVAL:-300}  # seconds between *.check.sh sweeps
 CHECK_TIMEOUT=${FM_CHECK_TIMEOUT:-30}     # seconds allowed per *.check.sh
 SIGNAL_GRACE=${FM_SIGNAL_GRACE:-30}   # seconds to linger after a signal so trailing
@@ -262,6 +270,17 @@ recorded_windows() {
     seen="$seen|$w|"
     printf '%s\n' "$w"
   done
+}
+
+# 0 iff any task currently has a recorded backend endpoint. The empty-fleet
+# case is what the HEARTBEAT_MAX backoff exists for; this distinguishes it
+# from a fleet with work plausibly in flight, which must not back off toward it.
+fleet_has_recorded_endpoint() {
+  local w
+  while IFS= read -r w; do
+    [ -n "$w" ] && return 0
+  done < <(recorded_windows)
+  return 1
 }
 
 # Consecutive wedge-escalation count for a window past FM_WEDGE_DEMAND_INSPECT_COUNT
@@ -630,6 +649,89 @@ heartbeat_scan_finds_actionable() {
     return 0
   done < <(scan_captain_relevant_statuses "$STATE")
   return 1
+}
+
+# lane_busy_verdict: the full bin/fm-busy-lib.sh classification token
+# ("busy"/"idle"/"dead"/"unknown", plus its source) for one recorded window's
+# task, including the endpoint-existence check fm_busy_classify_meta (used by
+# window_is_busy) skips - a worker that died and stopped writing reports dead
+# here, never idle or unknown.
+lane_busy_verdict() {  # <window> <task>
+  local w=$1 task=$2
+  fm_busy_classify_live "$(window_backend "$w")" "$w" "$(window_harness "$w")" \
+    "$task" "$STATE" "$(window_label "$w")"
+}
+
+_hb_idle_surfaced_path() {
+  printf '%s/.hb-idle-surfaced-%s' "$STATE" "$(printf '%s' "$1" | tr ':/.' '___')"
+}
+
+# scan_idle_lanes: "<window>\t<task>\t<verdict-token>\t<last-status-line>" for
+# every recorded window whose agent is idle or dead with no legitimate
+# explanation already on record: not a declared pause or verified captain-held
+# transfer, not a captain-relevant last line (a done:/needs-decision:/blocked:/
+# failed: line, e.g. a PR ready and waiting on review, is the captain-relevant
+# path's own signal to surface or suppress, never double-reported here), and
+# not an open captain decision (needs-decision/blocked still unresolved per
+# status_open_decisions, even when a later non-terminal line buries it).
+# Supervision detects failure through the captain-relevant status path above;
+# this is the silence backstop - a worker that finished cleanly or died
+# without writing a captain-relevant line emits no signal at all, so nothing
+# else notices it. Secondmate lanes are excluded: an idle mate pane is healthy
+# by design, since its routed status is the supervision signal, not its pane
+# (see the per-window stale loop's identical exclusion). An `unknown` busy
+# verdict is deliberately excluded, never promoted to idle: the source could
+# not answer, and treating that as idle would wake constantly for a harness
+# whose busy source is unverified.
+scan_idle_lanes() {  # <state>
+  local state=$1 w kind task last open verdict token
+  while IFS= read -r w; do
+    kind=$(window_kind "$w")
+    [ "$kind" = secondmate ] && continue
+    task=$(window_to_task "$w" "$state")
+    [ -n "$task" ] || continue
+    last=$(last_status_line "$state/$task.status")
+    status_is_paused_or_captain_held "$last" && continue
+    # A captain-relevant last line (done:/needs-decision:/blocked:/failed:, e.g.
+    # a PR ready and waiting on review) is already the captain-relevant path's
+    # own signal to surface or suppress; the idle scan must not double-report it.
+    status_is_captain_relevant "$last" && continue
+    open=$(status_open_decisions "$state/$task.status")
+    [ -n "$open" ] && continue
+    verdict=$(lane_busy_verdict "$w" "$task")
+    token=${verdict%% *}
+    case "$token" in
+      idle|dead) printf '%s\t%s\t%s\t%s\n' "$w" "$task" "$token" "$last" ;;
+    esac
+  done < <(recorded_windows)
+  return 0
+}
+
+# 0 iff scan_idle_lanes found a lane not yet surfaced at its current
+# (verdict, last-status) pair. Pure detect; the caller marks surfaced
+# separately, the same detect/mark split as the captain-relevant pair above.
+heartbeat_idle_lane_actionable() {
+  local w task token last marker prev
+  while IFS=$(printf '\t') read -r w task token last; do
+    [ -n "$w" ] || continue
+    marker=$(_hb_idle_surfaced_path "$task")
+    prev=$(cat "$marker" 2>/dev/null || true)
+    [ "$prev" = "$token"$'\t'"$last" ] && continue
+    return 0
+  done < <(scan_idle_lanes "$STATE")
+  return 1
+}
+
+# Mark every currently idle/dead lane surfaced at its current (verdict,
+# last-status) pair, so the next heartbeat does not re-fire it while nothing
+# has changed. Called after the heartbeat enqueues its wake, mirroring
+# mark_all_captain_relevant_surfaced.
+mark_all_idle_lanes_surfaced() {
+  local w task token last
+  while IFS=$(printf '\t') read -r w task token last; do
+    [ -n "$w" ] || continue
+    printf '%s\t%s' "$token" "$last" > "$(_hb_idle_surfaced_path "$task")"
+  done < <(scan_idle_lanes "$STATE")
 }
 
 # event_wait_or_sleep: the terminal wait of each supervision cycle. For a home
@@ -1170,29 +1272,39 @@ EOF
 
   # Heartbeat: the watcher runs a cheap fleet-scan at a regular cadence no matter
   # what. Time-based via .last-heartbeat mtime; interval doubles per consecutive
-  # no-change heartbeat (idle fleet) up to HEARTBEAT_MAX, and resets on any
-  # surfaced non-heartbeat wake.
+  # no-change heartbeat (idle fleet) up to a cap that resets on any surfaced
+  # non-heartbeat wake. The cap is HEARTBEAT_MAX for an empty fleet (no recorded
+  # endpoint at all) - the case backoff exists for - and the much tighter
+  # HEARTBEAT_BUSY_MAX whenever any task has a recorded endpoint, so a busy
+  # fleet can never drift toward a multi-hour blind spot.
   streak=$(cat "$STATE/.heartbeat-streak" 2>/dev/null || echo 0)
   [ "$streak" -gt 12 ] && streak=12
   hb=$(( HEARTBEAT * (1 << streak) ))
-  [ "$hb" -gt "$HEARTBEAT_MAX" ] && hb=$HEARTBEAT_MAX
+  hb_cap=$HEARTBEAT_MAX
+  fleet_has_recorded_endpoint && hb_cap=$HEARTBEAT_BUSY_MAX
+  [ "$hb" -gt "$hb_cap" ] && hb=$hb_cap
   if [ "$(age_of "$STATE/.last-heartbeat")" -ge "$hb" ]; then
     # Triage: in always-on mode a heartbeat is benign unless the cheap fleet-scan
-    # turns up a captain-relevant status the per-wake path missed. Absorb the
-    # no-change case (advance the schedule and back off exactly as wake() would,
-    # without exiting); the away-mode daemon, when present, owns triage and wants
-    # every heartbeat.
+    # turns up a captain-relevant status the per-wake path missed, or an idle/dead
+    # lane with no logged captain-relevant status and no legitimate explanation
+    # (declared pause, captain-held transfer, or open decision) - the silence
+    # backstop for a worker that finished cleanly or died without writing.
+    # Absorb the no-change case (advance the schedule and back off exactly as
+    # wake() would, without exiting); the away-mode daemon, when present, owns
+    # triage and wants every heartbeat.
     if afk_present; then
       fm_wake_append heartbeat heartbeat heartbeat || exit 1
       touch "$STATE/.last-heartbeat"
       wake "heartbeat"
-    elif heartbeat_scan_finds_actionable; then
-      # Backstop: a captain-relevant status the per-wake path absorbed by mistake.
-      # Enqueue first, then mark every captain-relevant status surfaced so the next
+    elif heartbeat_scan_finds_actionable || heartbeat_idle_lane_actionable; then
+      # Backstop: a captain-relevant status the per-wake path absorbed by
+      # mistake, or an unexplained idle/dead lane. Enqueue first, then mark
+      # every captain-relevant status and idle/dead lane surfaced so the next
       # heartbeat does not re-fire them (enqueue-before-suppress preserved).
       fm_wake_append heartbeat heartbeat heartbeat || exit 1
       touch "$STATE/.last-heartbeat"
       mark_all_captain_relevant_surfaced
+      mark_all_idle_lanes_surfaced
       wake "heartbeat"
     else
       touch "$STATE/.last-heartbeat"
