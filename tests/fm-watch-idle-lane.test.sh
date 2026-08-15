@@ -239,11 +239,11 @@ test_already_surfaced_idle_lane_not_refired() {
   pass "an idle lane already surfaced does not re-fire until its verdict or status genuinely changes"
 }
 
-# A busy spell ends the suppression episode: the marker is keyed on the
-# (verdict, last-status) pair, and the worker this predicate targets goes idle
-# without writing a status, so an unchanged status line must never suppress a
-# second silence episode.
-test_idle_marker_cleared_by_a_busy_spell() {
+# The marker key carries the lane's freshness stamp (the busy-state record's
+# mtime), so a second silence episode re-fires even when the heartbeat never
+# sampled the intervening busy moment and the status line never changed - the
+# worker this predicate targets goes idle without writing a status.
+test_idle_marker_keyed_on_busy_state_freshness() {
   reset_state
   fm_write_meta "$STATE_DIR/t11.meta" "window=sess:w11" "backend=tmux" "harness=pi" "kind=ship"
   printf 'working: setting up\n' > "$STATE_DIR/t11.status"
@@ -252,12 +252,16 @@ test_idle_marker_cleared_by_a_busy_spell() {
   mark_all_idle_lanes_surfaced
   [ -s "$STATE_DIR/.hb-idle-surfaced-t11" ] || fail "mark_all_idle_lanes_surfaced did not write the surfaced marker"
   heartbeat_idle_lane_actionable && fail "an idle lane already marked surfaced re-fired with nothing changed"
+  # The busy spell and the return to idle both happen between two heartbeats, so
+  # the scan only ever sees idle -> idle with the same status text. Only the
+  # busy-state record's mtime distinguishes the second episode from the first.
   busy_record t11 busy agent-start
-  scan_idle_lanes >/dev/null
-  [ -e "$STATE_DIR/.hb-idle-surfaced-t11" ] && fail "a lane observed busy again kept its stale surfaced marker"
   busy_record t11 idle agent-settled
+  set_mtime "$(( $(file_mtime "$STATE_DIR/t11.busy-state") + 60 ))" "$STATE_DIR/t11.busy-state"
   heartbeat_idle_lane_actionable || fail "a second idle spell with an unchanged status line did not re-fire"
-  pass "a busy spell clears the surfaced marker, so a later idle spell re-fires on an unchanged status line"
+  mark_all_idle_lanes_surfaced
+  heartbeat_idle_lane_actionable && fail "the re-surfaced idle lane re-fired again with nothing changed"
+  pass "the surfaced marker is keyed on busy-state freshness, so a later idle spell re-fires on an unchanged status line"
 }
 
 # --- fleet_has_recorded_endpoint: the backoff-cap selector -------------------
@@ -365,7 +369,7 @@ test_paused_lane_not_actionable
 test_unknown_verdict_not_actionable
 test_secondmate_lane_excluded
 test_already_surfaced_idle_lane_not_refired
-test_idle_marker_cleared_by_a_busy_spell
+test_idle_marker_keyed_on_busy_state_freshness
 test_fleet_has_recorded_endpoint
 test_dead_lane_surfaces_via_heartbeat
 test_heartbeat_backoff_capped_while_fleet_busy

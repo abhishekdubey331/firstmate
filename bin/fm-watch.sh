@@ -666,7 +666,18 @@ _hb_idle_surfaced_path() {
   printf '%s/.hb-idle-surfaced-%s' "$STATE" "$(printf '%s' "$1" | tr ':/.' '___')"
 }
 
-# scan_idle_lanes: "<window>\t<task>\t<verdict-token>\t<last-status-line>" for
+# lane_freshness_stamp: mtime of the lane's busy-state record, so a repeat idle
+# sample is a NEW silence episode whenever the record moved, even when the
+# heartbeat never sampled the intervening busy moment. Falls back to the meta
+# mtime for a harness that keeps no busy-state record (grok/muse/cursor).
+lane_freshness_stamp() {  # <task>
+  local task=$1 m
+  m=$(stat_mtime "$STATE/$task.busy-state") || m=""
+  [ -n "$m" ] || m=$(stat_mtime "$STATE/$task.meta") || m=""
+  printf '%s' "$m"
+}
+
+# scan_idle_lanes: "<window>\t<task>\t<verdict-token>\t<freshness-stamp>\t<last-status-line>" for
 # every recorded window whose agent is idle or dead with no legitimate
 # explanation already on record: not a declared pause or verified captain-held
 # transfer, not a captain-relevant last line (a done:/needs-decision:/blocked:/
@@ -682,12 +693,12 @@ _hb_idle_surfaced_path() {
 # (see the per-window stale loop's identical exclusion). An `unknown` busy
 # verdict is deliberately excluded, never promoted to idle: the source could
 # not answer, and treating that as idle would wake constantly for a harness
-# whose busy source is unverified. A lane observed busy again clears its
-# surfaced marker, so a later idle spell always re-fires even when its last
-# status line is unchanged - the worker this predicate targets is exactly the
-# one that goes idle without writing a status.
+# whose busy source is unverified. Each row carries the lane's freshness stamp
+# so a later idle spell re-fires even when its last status line is unchanged -
+# the worker this predicate targets is exactly the one that goes idle without
+# writing a status.
 scan_idle_lanes() {
-  local w kind task last open verdict token
+  local w kind task last open verdict token stamp
   while IFS= read -r w; do
     kind=$(window_kind "$w")
     [ "$kind" = secondmate ] && continue
@@ -704,37 +715,40 @@ scan_idle_lanes() {
     verdict=$(lane_busy_verdict "$w" "$task")
     token=${verdict%% *}
     case "$token" in
-      idle|dead) printf '%s\t%s\t%s\t%s\n' "$w" "$task" "$token" "$last" ;;
-      busy) rm -f "$(_hb_idle_surfaced_path "$task")" 2>/dev/null || true ;;
+      idle|dead)
+        stamp=$(lane_freshness_stamp "$task")
+        printf '%s\t%s\t%s\t%s\t%s\n' "$w" "$task" "$token" "$stamp" "$last"
+        ;;
     esac
   done < <(recorded_windows)
   return 0
 }
 
 # 0 iff scan_idle_lanes found a lane not yet surfaced at its current
-# (verdict, last-status) pair. Pure detect; the caller marks surfaced
-# separately, the same detect/mark split as the captain-relevant pair above.
+# (verdict, freshness-stamp, last-status) key. Pure detect; the caller marks
+# surfaced separately, the same detect/mark split as the captain-relevant pair
+# above.
 heartbeat_idle_lane_actionable() {
-  local w task token last marker prev
-  while IFS=$(printf '\t') read -r w task token last; do
+  local w task token stamp last marker prev
+  while IFS=$(printf '\t') read -r w task token stamp last; do
     [ -n "$w" ] || continue
     marker=$(_hb_idle_surfaced_path "$task")
     prev=$(cat "$marker" 2>/dev/null || true)
-    [ "$prev" = "$token"$'\t'"$last" ] && continue
+    [ "$prev" = "$token"$'\t'"$stamp"$'\t'"$last" ] && continue
     return 0
   done < <(scan_idle_lanes)
   return 1
 }
 
 # Mark every currently idle/dead lane surfaced at its current (verdict,
-# last-status) pair, so the next heartbeat does not re-fire it while nothing
-# has changed. Called after the heartbeat enqueues its wake, mirroring
-# mark_all_captain_relevant_surfaced.
+# freshness-stamp, last-status) key, so the next heartbeat does not re-fire it
+# while nothing has changed. Called after the heartbeat enqueues its wake,
+# mirroring mark_all_captain_relevant_surfaced.
 mark_all_idle_lanes_surfaced() {
-  local w task token last
-  while IFS=$(printf '\t') read -r w task token last; do
+  local w task token stamp last
+  while IFS=$(printf '\t') read -r w task token stamp last; do
     [ -n "$w" ] || continue
-    printf '%s\t%s' "$token" "$last" > "$(_hb_idle_surfaced_path "$task")"
+    printf '%s\t%s\t%s' "$token" "$stamp" "$last" > "$(_hb_idle_surfaced_path "$task")"
   done < <(scan_idle_lanes)
 }
 
