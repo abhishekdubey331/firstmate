@@ -678,7 +678,7 @@ _hb_idle_surfaced_path() {
 # original last-status-only dedup.
 lane_freshness_stamp() {  # <task>
   local task=$1 m
-  m=$(stat_mtime "$STATE/$task.busy-state") || m=""
+  m=$(stat_mtime "$(fm_busy_record_path "$STATE" "$task")") || m=""
   printf '%s' "$m"
 }
 
@@ -715,12 +715,15 @@ scan_idle_lanes() {
     # a PR ready and waiting on review) is already the captain-relevant path's
     # own signal to surface or suppress; the idle scan must not double-report it.
     status_is_captain_relevant "$last" && continue
-    open=$(status_open_decisions "$STATE/$task.status")
-    [ -n "$open" ] && continue
     verdict=$(lane_busy_verdict "$w" "$task")
     token=${verdict%% *}
     case "$token" in
       idle|dead)
+        # Last gate, and the only unbounded one: status_open_decisions folds the
+        # WHOLE status log (bin/fm-classify-lib.sh), so it runs only for a lane
+        # already classified idle or dead, never for the common busy lane.
+        open=$(status_open_decisions "$STATE/$task.status")
+        [ -n "$open" ] && continue
         stamp=$(lane_freshness_stamp "$task")
         printf '%s\t%s\t%s\t%s\t%s\n' "$w" "$task" "$token" "$stamp" "$last"
         ;;
@@ -732,29 +735,33 @@ scan_idle_lanes() {
 # 0 iff scan_idle_lanes found a lane not yet surfaced at its current
 # (verdict, freshness-stamp, last-status) key. Pure detect; the caller marks
 # surfaced separately, the same detect/mark split as the captain-relevant pair
-# above.
-heartbeat_idle_lane_actionable() {
-  local w task token stamp last marker prev
+# above. Takes already-captured scan rows so the detect and the mark step judge
+# ONE sample of the fleet; with no argument it scans for itself.
+heartbeat_idle_lane_actionable() {  # [scan-rows]
+  local rows w task token stamp last marker prev
+  if [ $# -ge 1 ]; then rows=$1; else rows=$(scan_idle_lanes); fi
   while IFS=$(printf '\t') read -r w task token stamp last; do
     [ -n "$w" ] || continue
     marker=$(_hb_idle_surfaced_path "$task")
     prev=$(cat "$marker" 2>/dev/null || true)
     [ "$prev" = "$token"$'\t'"$stamp"$'\t'"$last" ] && continue
     return 0
-  done < <(scan_idle_lanes)
+  done <<< "$rows"
   return 1
 }
 
 # Mark every currently idle/dead lane surfaced at its current (verdict,
 # freshness-stamp, last-status) key, so the next heartbeat does not re-fire it
 # while nothing has changed. Called after the heartbeat enqueues its wake,
-# mirroring mark_all_captain_relevant_surfaced.
-mark_all_idle_lanes_surfaced() {
-  local w task token stamp last
+# mirroring mark_all_captain_relevant_surfaced. Takes the same captured scan
+# rows the detect step judged; with no argument it scans for itself.
+mark_all_idle_lanes_surfaced() {  # [scan-rows]
+  local rows w task token stamp last
+  if [ $# -ge 1 ]; then rows=$1; else rows=$(scan_idle_lanes); fi
   while IFS=$(printf '\t') read -r w task token stamp last; do
     [ -n "$w" ] || continue
     printf '%s\t%s\t%s' "$token" "$stamp" "$last" > "$(_hb_idle_surfaced_path "$task")"
-  done < <(scan_idle_lanes)
+  done <<< "$rows"
 }
 
 # event_wait_or_sleep: the terminal wait of each supervision cycle. For a home
@@ -1319,20 +1326,26 @@ EOF
       fm_wake_append heartbeat heartbeat heartbeat || exit 1
       touch "$STATE/.last-heartbeat"
       wake "heartbeat"
-    elif heartbeat_scan_finds_actionable || heartbeat_idle_lane_actionable; then
-      # Backstop: a captain-relevant status the per-wake path absorbed by
-      # mistake, or an unexplained idle/dead lane. Enqueue first, then mark
-      # every captain-relevant status and idle/dead lane surfaced so the next
-      # heartbeat does not re-fire them (enqueue-before-suppress preserved).
-      fm_wake_append heartbeat heartbeat heartbeat || exit 1
-      touch "$STATE/.last-heartbeat"
-      mark_all_captain_relevant_surfaced
-      mark_all_idle_lanes_surfaced
-      wake "heartbeat"
     else
-      touch "$STATE/.last-heartbeat"
-      echo $(( $(cat "$STATE/.heartbeat-streak" 2>/dev/null || echo 0) + 1 )) > "$STATE/.heartbeat-streak"
-      triage_log "absorbed heartbeat (no captain-relevant change)"
+      # One fleet sample feeds both the detect check and the mark step, so a
+      # lane that changes verdict between them can never be woken from one
+      # sample and suppressed from another.
+      idle_rows=$(scan_idle_lanes)
+      if heartbeat_scan_finds_actionable || heartbeat_idle_lane_actionable "$idle_rows"; then
+        # Backstop: a captain-relevant status the per-wake path absorbed by
+        # mistake, or an unexplained idle/dead lane. Enqueue first, then mark
+        # every captain-relevant status and idle/dead lane surfaced so the next
+        # heartbeat does not re-fire them (enqueue-before-suppress preserved).
+        fm_wake_append heartbeat heartbeat heartbeat || exit 1
+        touch "$STATE/.last-heartbeat"
+        mark_all_captain_relevant_surfaced
+        mark_all_idle_lanes_surfaced "$idle_rows"
+        wake "heartbeat"
+      else
+        touch "$STATE/.last-heartbeat"
+        echo $(( $(cat "$STATE/.heartbeat-streak" 2>/dev/null || echo 0) + 1 )) > "$STATE/.heartbeat-streak"
+        triage_log "absorbed heartbeat (no captain-relevant change)"
+      fi
     fi
   fi
 

@@ -294,6 +294,27 @@ test_recordless_harness_has_an_empty_freshness_field() {
   pass "a lane with no busy-state record gets an empty freshness field and a stable marker key"
 }
 
+# The heartbeat judges ONE fleet sample: the rows it detects on are the rows it
+# marks surfaced. Both helpers therefore accept captured rows, and must use
+# those rows rather than re-scanning a fleet that has moved on since.
+test_detect_and_mark_share_one_captured_sample() {
+  reset_state
+  fm_write_meta "$STATE_DIR/t13.meta" "window=sess:w13" "backend=tmux" "harness=pi" "kind=ship"
+  printf 'working: setting up\n' > "$STATE_DIR/t13.status"
+  busy_record t13 idle agent-settled
+  local rows
+  rows=$(scan_idle_lanes)
+  [ -n "$rows" ] || fail "an idle lane produced no scan rows"
+  # The fleet moves on: the lane goes busy, so a fresh scan now yields nothing.
+  busy_record t13 busy agent-start
+  [ -z "$(scan_idle_lanes)" ] || fail "the lane did not go busy, so this case proves nothing"
+  heartbeat_idle_lane_actionable "$rows" || fail "the captured sample was ignored by the detect step"
+  mark_all_idle_lanes_surfaced "$rows"
+  [ -s "$STATE_DIR/.hb-idle-surfaced-t13" ] || fail "the mark step ignored the captured sample and re-scanned instead"
+  heartbeat_idle_lane_actionable "$rows" && fail "the marked sample still reported actionable"
+  pass "the detect and mark steps judge the same captured fleet sample"
+}
+
 # --- fleet_has_recorded_endpoint: the backoff-cap selector -------------------
 
 test_fleet_has_recorded_endpoint() {
@@ -401,6 +422,7 @@ test_secondmate_lane_excluded
 test_already_surfaced_idle_lane_not_refired
 test_idle_marker_keyed_on_busy_state_freshness
 test_recordless_harness_has_an_empty_freshness_field
+test_detect_and_mark_share_one_captured_sample
 test_fleet_has_recorded_endpoint
 test_dead_lane_surfaces_via_heartbeat
 test_heartbeat_backoff_capped_while_fleet_busy
