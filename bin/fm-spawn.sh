@@ -2070,6 +2070,7 @@ EOF
       exit 1
     fi
     T="$HERDR_SES:$HERDR_PANE_ID"
+    fm_backend_herdr_cli "$HERDR_SES" agent rename "$HERDR_PANE_ID" "$ID" >/dev/null 2>&1 || true
     ;;
   zellij)
     ZELLIJ_SES=$(fm_backend_zellij_container_ensure) || exit 1
