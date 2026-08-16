@@ -451,7 +451,7 @@ test_codex_threads_model_and_effort() {
   pass "codex receives --model and model_reasoning_effort profile flags"
 }
 
-test_codex_omits_invalid_max_effort() {
+test_codex_threads_max_effort() {
   local rec id out status launch
   id=profile-codex-max-z4
   rec=$(make_spawn_case profile-codex-max codex "$id")
@@ -459,13 +459,59 @@ test_codex_omits_invalid_max_effort() {
 
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --model gpt-5 --effort max)
   status=$?
-  expect_code 0 "$status" "codex spawn with unsupported max effort should omit the effort flag"
+  expect_code 0 "$status" "codex spawn with max effort should succeed"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 max
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "codex --model 'gpt-5' --dangerously-bypass-approvals-and-sandbox" \
-    "codex launch did not preserve the model flag when max effort was omitted"
-  assert_not_contains "$launch" "model_reasoning_effort" "codex launch must omit unsupported max reasoning effort"
-  pass "codex omits unsupported max effort instead of passing a bad config value"
+  assert_contains "$launch" "codex --model 'gpt-5' -c 'model_reasoning_effort=\"max\"' --dangerously-bypass-approvals-and-sandbox" \
+    "codex launch did not thread the verified max reasoning effort"
+  pass "codex receives verified max reasoning effort"
+}
+
+test_codex_threads_task_scoped_web_search() {
+  local rec id out status launch
+  id=profile-codex-search-z4b
+  rec=$(make_spawn_case profile-codex-search codex "$id")
+  read_case_record "$rec"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" \
+    --model gpt-5.6-terra --effort high --web-search on)
+  status=$?
+  expect_code 0 "$status" "codex spawn with task-scoped web search should succeed"
+  assert_grep 'web_search=on' "$HOME_DIR/state/$id.meta" "codex search posture was not recorded"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "codex --model 'gpt-5.6-terra' -c 'model_reasoning_effort=\"high\"' --search --dangerously-bypass-approvals-and-sandbox" \
+    "codex launch did not thread the native live-search flag"
+  pass "codex receives task-scoped live web search"
+}
+
+test_web_search_off_stays_absent() {
+  local rec id out status launch
+  id=profile-codex-search-off-z4c
+  rec=$(make_spawn_case profile-codex-search-off codex "$id")
+  read_case_record "$rec"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --web-search off)
+  status=$?
+  expect_code 0 "$status" "codex spawn with web search off should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_not_contains "$launch" "--search" "search-off codex launch must not receive --search"
+  assert_not_contains "$(cat "$HOME_DIR/state/$id.meta")" "web_search=" "search-off meta must preserve the absent-default form"
+  pass "live web search stays off unless explicitly selected"
+}
+
+test_non_codex_web_search_is_refused() {
+  local rec id out status
+  id=profile-claude-search-z4d
+  rec=$(make_spawn_case profile-claude-search claude "$id")
+  read_case_record "$rec"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --web-search on)
+  status=$?
+  expect_code 1 "$status" "non-codex live web search should be refused"
+  assert_contains "$out" "--web-search on is verified only for the codex harness" \
+    "non-codex search refusal did not name the capability boundary"
+  assert_absent "$HOME_DIR/state/$id.meta" "refused search launch must not publish task metadata"
+  pass "non-codex live web search fails closed"
 }
 
 test_grok_threads_model_and_reasoning_effort() {
@@ -839,7 +885,10 @@ test_active_dispatch_profile_allows_positional_harness
 test_active_dispatch_profile_allows_raw_launch_command
 test_claude_threads_model_and_effort
 test_codex_threads_model_and_effort
-test_codex_omits_invalid_max_effort
+test_codex_threads_max_effort
+test_codex_threads_task_scoped_web_search
+test_web_search_off_stays_absent
+test_non_codex_web_search_is_refused
 test_grok_threads_model_and_reasoning_effort
 test_grok_omits_invalid_max_reasoning_effort
 test_grok_omits_invalid_xhigh_reasoning_effort

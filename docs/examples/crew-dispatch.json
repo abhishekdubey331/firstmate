@@ -6,6 +6,11 @@
       "why": "Grok is the preferred dispatch when current web-connected context is central to the work."
     },
     {
+      "when": "The task is bounded technical research that requires current public sources.",
+      "use": { "harness": "codex", "model": "gpt-5.6-terra", "effort": "high", "webSearch": true },
+      "why": "Enable live web search only for the task profiles that need it."
+    },
+    {
       "when": "The task is a trivial mechanical edit such as a rote rename, formatting sweep, targeted typo fix, or simple file gathering.",
       "use": { "harness": "claude", "model": "haiku", "effort": "low" },
       "why": "Use the cheapest fast profile when the task is narrow and low ambiguity."

@@ -509,13 +509,17 @@ test_same_harness_relaunch_keeps_the_profile_axes() {
   local dir out rc
   dir=$(new_case keepprofile rl6)
   add_ship_task "$dir" rl6 claude
-  sed 's/^model=default$/model=opus/; s/^effort=default$/effort=high/' \
+  sed 's/^harness=claude$/harness=codex/; s/^model=default$/model=opus/; s/^effort=default$/effort=high/' \
     "$dir/home/state/rl6.meta" > "$dir/home/state/rl6.meta.tmp"
   mv "$dir/home/state/rl6.meta.tmp" "$dir/home/state/rl6.meta"
+  printf '%s\n' 'web_search=on' >> "$dir/home/state/rl6.meta"
+  printf 'codex' > "$dir/fake/command"
+  printf 'codex' > "$dir/fake/becomes"
   out=$(run_control "$dir" rl6 relaunch --note "same runtime"); rc=$?
   expect_code 0 "$rc" "a same-harness relaunch should succeed"$'\n'"$out"
   [ "$(meta_field "$dir" rl6 model)" = opus ] || fail "the model should carry across a same-harness relaunch"
   [ "$(meta_field "$dir" rl6 effort)" = high ] || fail "the effort should carry across a same-harness relaunch"
+  [ "$(meta_field "$dir" rl6 web_search)" = on ] || fail "the live-search posture should carry across a same-harness relaunch"
   pass "fm-control relaunch: a same-harness relaunch keeps the profile axes it was running with"
 }
 
@@ -528,6 +532,18 @@ test_explicit_model_wins_over_the_recorded_one() {
   [ "$(meta_field "$dir" rl7 model)" = sonnet ] || fail "an explicit model should be recorded"
   [ "$(meta_field "$dir" rl7 effort)" = low ] || fail "an explicit effort should be recorded"
   pass "fm-control relaunch: explicit model and effort win over the recorded ones"
+}
+
+test_explicit_web_search_wins_on_codex_relaunch() {
+  local dir out rc
+  dir=$(new_case explicitweb rl7b)
+  add_ship_task "$dir" rl7b claude
+  printf 'codex' > "$dir/fake/becomes"
+  out=$(run_control "$dir" rl7b relaunch --harness codex --model gpt-5.6-terra \
+    --effort high --web-search on --note "current-source research"); rc=$?
+  expect_code 0 "$rc" "relaunch with explicit Codex live search should succeed"$'\n'"$out"
+  [ "$(meta_field "$dir" rl7b web_search)" = on ] || fail "explicit live search should be recorded"
+  pass "fm-control relaunch: explicit Codex live search wins"
 }
 
 test_relaunch_onto_an_unverified_harness_is_refused() {
@@ -1324,6 +1340,7 @@ test_harness_switch_resolves_a_prefixed_recorded_harness
 test_prefixed_recorded_harness_requires_explicit_replacement
 test_same_harness_relaunch_keeps_the_profile_axes
 test_explicit_model_wins_over_the_recorded_one
+test_explicit_web_search_wins_on_codex_relaunch
 test_relaunch_onto_an_unverified_harness_is_refused
 test_prior_harness_turnend_registry_entry_is_cleared
 test_wiring_removal_failure_refuses_before_replacement_arm
