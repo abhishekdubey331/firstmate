@@ -616,6 +616,11 @@ if [ "$REEMIT" -eq 1 ]; then
 else
   section "SESSION START - $FM_HOME"
 fi
+# --- session name -------------------------------------------------------
+SESSION_NAME=$(head -1 "$FM_HOME/config/session-name" 2>/dev/null | tr -d '[:space:]')
+[ -n "$SESSION_NAME" ] || SESSION_NAME=firstmate
+printf 'session name: %s\n' "$SESSION_NAME"
+printf "  Claude Code UI: \`/rename %s\` for this session, or relaunch with \`claude --name %s\` next time.\n" "$SESSION_NAME" "$SESSION_NAME"
 # --- 1. lock -----------------------------------------------------------
 stage lock
 subsection "LOCK"

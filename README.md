@@ -89,8 +89,11 @@ Then launch one of the co-primary harnesses; AGENTS.md takes over from there:
 **Claude Code**
 
 ```sh
-claude
+claude --name firstmate
 ```
+
+The `--name` flag sets the session's display title in the picker and terminal.
+Default is `firstmate`; override per home by writing the desired name to a single line in `config/session-name` (gitignored, captain-private), then launch with `claude --name "$(cat config/session-name)"`.
 
 **Grok**
 
