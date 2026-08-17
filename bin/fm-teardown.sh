@@ -2064,6 +2064,13 @@ FMEOF
 
 teardown_herdr_require_prerequisites() {  # <task-id>
   local task_id=$1 prerequisite
+  # Bash 3.2 exits immediately when a sourced file is missing, before the
+  # caller can handle the failure, and its EXIT trap then observes status 0.
+  # Refuse explicitly so a missing adapter cannot masquerade as successful cleanup.
+  if [ ! -f "$FM_BACKEND_LIB_DIR/backends/herdr.sh" ]; then
+    echo "error: herdr teardown prerequisites are unavailable for $task_id; nothing was changed - restore the adapter and rerun teardown" >&2
+    return 1
+  fi
   if ! fm_backend_source herdr; then
     echo "error: herdr teardown prerequisites are unavailable for $task_id; nothing was changed - restore the adapter and rerun teardown" >&2
     return 1
