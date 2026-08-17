@@ -1,0 +1,1 @@
+not ok - herdr-preflight-missing-adapter: teardown continued without its required preflight

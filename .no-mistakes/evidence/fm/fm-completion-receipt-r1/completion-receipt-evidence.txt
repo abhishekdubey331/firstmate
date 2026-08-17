@@ -1,0 +1,26 @@
+## Step 1: prepare a real report artifact
+## Step 2: invoke fm-complete.sh for kind=ship mode=no-mistakes
+/var/folders/2f/t93tm4q16tgfszs6_l1mvxpm0000gn/T/fm-completion-evidence-XXXXXX.l6dCM7fPFq/home/state/a1.completion-receipt
+## Produced: /var/folders/2f/t93tm4q16tgfszs6_l1mvxpm0000gn/T/fm-completion-evidence-XXXXXX.l6dCM7fPFq/home/state/a1.completion-receipt
+schema=fm-completion-receipt.v1
+task_id=a1
+spawn_gen=s-evidence-1
+kind=ship
+mode=no-mistakes
+outcome=done
+artifact_path=
+worktree_head=2cb324bee35a98c1243aed0305404d8699ef1f7c
+created_epoch=1786994577
+pr_url=https://github.com/example/repo/pull/55
+
+## Status file (legacy dual-write):
+done: PR ready
+
+## Shadow comparison:
+v1 epoch=1786994578 task=a1 spawn_gen=s-evidence-1 harness=codex backend=tmux trigger=completion completion=done process=absent shadow=ready current=working comparison=different
+
+## Step 3: invoke fm-completion-shadow.sh read --disagreements
+v1 epoch=1786994578 task=a1 spawn_gen=s-evidence-1 harness=codex backend=tmux trigger=completion completion=done process=absent shadow=ready current=working comparison=different
+
+## Step 4: read full ledger
+v1 epoch=1786994578 task=a1 spawn_gen=s-evidence-1 harness=codex backend=tmux trigger=completion completion=done process=absent shadow=ready current=working comparison=different

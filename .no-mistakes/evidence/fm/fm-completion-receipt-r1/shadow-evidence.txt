@@ -1,0 +1,9 @@
+## Build one task per harness x backend pair and record shadow rows
+
+## Per-task shadow sample (one example)
+v1 epoch=1786994843 task=ax-claude-tmux spawn_gen=s-ax-claude-tmux harness=claude backend=tmux trigger=manual completion=absent process=absent shadow=running current=unknown comparison=no-comparison
+
+## Verify disagreements read for the example (current=unknown vs no completion=absent -> comparison=no-comparison)
+
+## Same but with FM_FAKE_CURRENT_STATE=done to make a disagreement
+v1 epoch=1786994848 task=ax-claude-tmux spawn_gen=s-ax-claude-tmux harness=claude backend=tmux trigger=completion completion=done process=absent shadow=ready current=working comparison=different

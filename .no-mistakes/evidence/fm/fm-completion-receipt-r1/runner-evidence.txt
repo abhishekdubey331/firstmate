@@ -1,0 +1,33 @@
+## Test 1: normal exit (child exits 0)
+wrapper stdout: child-stdout
+wrapper exit code: 0
+process-exit receipt:
+schema=fm-process-exit-receipt.v1
+task_id=run1
+spawn_gen=s-evidence-runner
+harness=claude
+backend=tmux
+process_pid=80909
+process_identity=6c73746172743d547565204175672031382030303a35373a31312032303236
+exit_epoch=1786994832
+wait_status=0
+
+
+## Test 2: killed exit (child receives SIGKILL, expect wait_status=137)
+child pid: 81195
+/Users/aibuilders/.no-mistakes/worktrees/8decc6a0d3a4/01M08HYB7CJMVQB4SMD2J54D5D/bin/fm-harness-run.sh: line 75: 81195 Killed: 9               ( SUB_OLD_UMASK=$(umask); umask 077; CHILD_SELF=${BASHPID:-$$}; CHILD_IDENTITY=$(fm_completion_process_identity "$CHILD_SELF" 2>/dev/null || true); printf 'pid=%s\nidentity=%s\n' "$CHILD_SELF" "$CHILD_IDENTITY" > "$START_RECORD"; umask "$SUB_OLD_UMASK"; exec "$@" ) 0<&0
+wrapper exit code: 137
+process-exit receipt:
+schema=fm-process-exit-receipt.v1
+task_id=run2
+spawn_gen=s-evidence-runner
+harness=muse
+backend=cmux
+process_pid=81195
+process_identity=6c73746172743d547565204175672031382030303a35373a31322032303236
+exit_epoch=1786994832
+wait_status=137
+
+
+## Test 3: invoke fm-completion-shadow.sh read for the killed task
+v1 epoch=1786994833 task=run2 spawn_gen=s-evidence-runner harness=muse backend=cmux trigger=process-exit completion=absent process=exited-nonzero shadow=abnormal-exit current=unknown comparison=different
