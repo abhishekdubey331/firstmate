@@ -54,16 +54,16 @@ case "$BACKEND" in tmux|herdr|zellij|orca|cmux) : ;; *) usage ;; esac
 META="$STATE/$ID.meta"
 START_RECORD="$STATE/.$ID.process-start.${BASHPID:-$$}"
 rm -f "$START_RECORD" 2>/dev/null || true
-OLD_UMASK=$(umask)
-umask 077
 (
+  SUB_OLD_UMASK=$(umask)
+  umask 077
   CHILD_SELF=${BASHPID:-$$}
   CHILD_IDENTITY=$(fm_completion_process_identity "$CHILD_SELF" 2>/dev/null || true)
   printf 'pid=%s\nidentity=%s\n' "$CHILD_SELF" "$CHILD_IDENTITY" > "$START_RECORD"
+  umask "$SUB_OLD_UMASK"
   exec "$@"
 ) <&0 &
 CHILD_PID=$!
-umask "$OLD_UMASK"
 
 i=0
 while [ ! -f "$START_RECORD" ] && [ "$i" -lt 100 ]; do
