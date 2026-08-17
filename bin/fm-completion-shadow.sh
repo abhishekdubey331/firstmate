@@ -93,12 +93,12 @@ if [ -e "$STATE/$ID.process-exit-receipt" ] || [ -L "$STATE/$ID.process-exit-rec
 fi
 
 if [ "$PROCESS" = exited-zero ] || [ "$PROCESS" = exited-nonzero ]; then
-  if [ "$COMPLETION" = done ] || [ "$COMPLETION" = failed ]; then
+  if [ "$COMPLETION" = "done" ] || [ "$COMPLETION" = "failed" ]; then
     SHADOW=worker-stopped
   else
     SHADOW=abnormal-exit
   fi
-elif [ "$COMPLETION" = done ] || [ "$COMPLETION" = failed ]; then
+elif [ "$COMPLETION" = "done" ] || [ "$COMPLETION" = "failed" ]; then
   SHADOW=ready
 else
   SHADOW=running

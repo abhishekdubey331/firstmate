@@ -52,7 +52,7 @@ run_runner() {  # <id> <gen> <harness> <backend> -- <command...>
 test_completion_schema_and_dual_status() {
   local id=receipt-schema-r1 receipt shadow
   make_world schema "$id" ship no-mistakes
-  receipt=$(FM_FAKE_CURRENT_STATE=working run_complete "$id" "$GEN" done 'PR ready' --pr https://github.com/example/repo/pull/12)
+  receipt=$(FM_FAKE_CURRENT_STATE=working run_complete "$id" "$GEN" "done" 'PR ready' --pr https://github.com/example/repo/pull/12)
   [ "$receipt" = "$HOME_DIR/state/$id.completion-receipt" ] || fail "completion helper did not print its receipt path"
   assert_grep 'schema=fm-completion-receipt.v1' "$receipt" "completion schema version missing"
   assert_grep "task_id=$id" "$receipt" "completion receipt lost task identity"
@@ -77,7 +77,7 @@ test_completion_schema_and_dual_status() {
 test_schema_validation_rejects_malformed_receipt() {
   local id=receipt-invalid-r2
   make_world invalid "$id" ship direct-PR
-  FM_FAKE_CURRENT_STATE=done run_complete "$id" "$GEN" done 'ready' >/dev/null
+  FM_FAKE_CURRENT_STATE="done" run_complete "$id" "$GEN" "done" 'ready' >/dev/null
   printf 'unknown_field=1\n' >> "$HOME_DIR/state/$id.completion-receipt"
   FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" \
     FM_SHADOW_CREW_STATE_BIN="$WORLD/crew-state" "$SHADOW" record "$id"
@@ -89,7 +89,7 @@ test_schema_validation_rejects_malformed_receipt() {
 test_incarnation_binding_and_stale_rejection() {
   local id=receipt-stale-r3 before out status
   make_world stale "$id" ship direct-PR
-  run_complete "$id" "$GEN" done 'first incarnation' >/dev/null
+  run_complete "$id" "$GEN" "done" 'first incarnation' >/dev/null
   before=$(cat "$HOME_DIR/state/$id.completion-receipt")
   sed "s/^spawn_gen=.*/spawn_gen=s-new-incarnation/" "$HOME_DIR/state/$id.meta" > "$HOME_DIR/state/$id.meta.new"
   mv "$HOME_DIR/state/$id.meta.new" "$HOME_DIR/state/$id.meta"
@@ -110,14 +110,14 @@ test_incarnation_binding_and_stale_rejection() {
 test_investigation_requires_report_path() {
   local id=receipt-scout-r4 out status report
   make_world scout "$id" scout scout
-  out=$(run_complete "$id" "$GEN" done 'investigation complete' 2>&1)
+  out=$(run_complete "$id" "$GEN" "done" 'investigation complete' 2>&1)
   status=$?
   expect_code 1 "$status" "investigation completion without a report path must fail"
   assert_contains "$out" 'investigation completion requires --artifact' "missing report refusal was not actionable"
   assert_absent "$HOME_DIR/state/$id.completion-receipt" "report-less investigation published a receipt"
   report="$HOME_DIR/data/$id/report.md"
   printf '# report\n' > "$report"
-  run_complete "$id" "$GEN" done 'investigation complete' --artifact "$report" >/dev/null
+  run_complete "$id" "$GEN" "done" 'investigation complete' --artifact "$report" >/dev/null
   report="$(cd "$(dirname "$report")" && pwd -P)/$(basename "$report")"
   assert_grep "artifact_path=$report" "$HOME_DIR/state/$id.completion-receipt" \
     "investigation receipt did not bind the report path"
@@ -128,13 +128,13 @@ test_local_only_requires_clean_task_branch() {
   local id=receipt-local-r5 out status
   make_world local "$id" ship local-only
   printf 'dirty\n' >> "$WT/README.md"
-  out=$(run_complete "$id" "$GEN" done 'ready in branch' 2>&1)
+  out=$(run_complete "$id" "$GEN" "done" 'ready in branch' 2>&1)
   status=$?
   expect_code 1 "$status" "dirty local-only worktree must be refused"
   assert_contains "$out" 'requires a clean worktree' "dirty local-only refusal was not actionable"
   git -C "$WT" checkout -- README.md
   git -C "$WT" checkout -qb wrong-branch
-  out=$(run_complete "$id" "$GEN" done 'ready in branch' 2>&1)
+  out=$(run_complete "$id" "$GEN" "done" 'ready in branch' 2>&1)
   status=$?
   expect_code 1 "$status" "wrong local-only branch must be refused"
   assert_contains "$out" "requires task branch fm/$id" "wrong-branch refusal did not name the task branch"
@@ -155,9 +155,11 @@ test_process_exit_normal_and_killed() {
   grep -Eq '^process_identity=[0-9a-f]+$' "$HOME_DIR/state/$id.process-exit-receipt" \
     || fail "normal exit did not retain process incarnation identity"
 
+  # shellcheck disable=SC2100 # id is a literal task-id suffix, not arithmetic.
   id=receipt-killed-r7
   make_world exit-killed "$id" ship direct-PR muse cmux
   pidfile="$WORLD/child.pid"
+  # shellcheck disable=SC2016 # child shell must expand $$ and $1 inside the literal script.
   run_runner --task "$id" --spawn-gen "$GEN" --harness muse --backend cmux -- \
     /bin/sh -c 'printf "%s\n" "$$" > "$1"; while :; do sleep 1; done' _ "$pidfile" &
   wrapper=$!
@@ -186,6 +188,7 @@ test_process_exit_normal_and_killed() {
 test_process_wrapper_preserves_child_io_and_status() {
   local id=receipt-io-r7b out status
   make_world process-io "$id" ship direct-PR opencode zellij
+  # shellcheck disable=SC2016 # child shell must expand $line inside the literal script.
   out=$(printf 'hello\n' | run_runner --task "$id" --spawn-gen "$GEN" --harness opencode --backend zellij -- \
     /bin/sh -c 'IFS= read -r line; [ "$line" = hello ]; printf "child-output\n"')
   status=$?
@@ -231,7 +234,7 @@ exit 99
 SH
   chmod +x "$trapbin/fm-teardown.sh"
   FM_CLEANUP_TRIPWIRE="$WORLD/cleanup-called" PATH="$trapbin:$PATH" \
-    FM_TEARDOWN_BIN="$trapbin/fm-teardown.sh" run_complete "$id" "$GEN" done 'ready' >/dev/null
+    FM_TEARDOWN_BIN="$trapbin/fm-teardown.sh" run_complete "$id" "$GEN" "done" 'ready' >/dev/null
   FM_CLEANUP_TRIPWIRE="$WORLD/cleanup-called" PATH="$trapbin:$PATH" \
     FM_TEARDOWN_BIN="$trapbin/fm-teardown.sh" \
     run_runner --task "$id" --spawn-gen "$GEN" --harness codex --backend tmux -- /bin/sh -c 'exit 0'
@@ -244,7 +247,7 @@ SH
 test_shadow_read_interface_documents_disagreements() {
   local id=receipt-read-r9 help out
   make_world read "$id" ship direct-PR
-  FM_FAKE_CURRENT_STATE=working run_complete "$id" "$GEN" done 'ready' >/dev/null
+  FM_FAKE_CURRENT_STATE=working run_complete "$id" "$GEN" "done" 'ready' >/dev/null
   out=$(FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" "$SHADOW" read "$id" --disagreements)
   assert_contains "$out" 'comparison=different' "shadow read did not expose the disagreement"
   help=$($SHADOW --help 2>&1 || true)
